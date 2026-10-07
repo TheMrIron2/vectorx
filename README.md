@@ -8,7 +8,7 @@ This is a final year project for my TU856 computer science degree.
 
 VectorX is a new 3D rail shooter inspired by futuristic 80s aesthetics and feel. Unlike modern 3D games that rely on textured polygons and detailed environments, VectorX embraces an alternative solution, using vector visuals to evoke a sci-fi feel.
 
-The project will be built on a clean and portable OpenGL engine designed specifically for it.
+The project is built using OpenGL and SDL3.
 
 Run `build/debug/vectorx.exe` or `.\run.ps1` to play.
 
@@ -24,12 +24,6 @@ Run `build/debug/vectorx.exe` or `.\run.ps1` to play.
 | Escape | Exit |
 
 Glow is controlled by `VxRenderSettings` in `src/core/render_settings.h` and can be adjusted from the command line with eg. `--glow-strength 0.75 --glow-radius 1.2`.
-
-16:9 is now the default. Both movement axes use a fixed 13.75 units/second, matching the earlier widescreen horizontal pace independently of viewport width. V retains the other view modes.
-
-`bgm/Overdriven Purpose.ogg` starts with gameplay and loops. Music pauses with P or focus loss and resumes in place; R keeps it playing. Set volume with `--music-volume 0.65` (0–1). CMake copies `bgm/` beside the executable; keep that folder with a moved build. Automated captures stay silent.
-
-The final game will offer a choice of three songs before a run, inspired by the original OutRun. This is recorded in [music design notes](docs/music.md); the prototype automatically plays the supplied track.
 
 ## Build 
 
