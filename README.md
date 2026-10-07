@@ -40,17 +40,3 @@ ctest --test-dir build/game -C Debug --output-on-failure
 ```
 
 Run `build/game/vectorx` on Linux/macOS, `build/game/vectorx.exe` with Ninja/MinGW on Windows, or `build/game/Debug/vectorx.exe` with Visual Studio.
-
-## Project structure
-
-```text
-src/
-  core/       Vector math, projection, clipping, render settings
-  game/       Flight, ship geometry, projectile pool, corridor and scene
-  platform/   SDL/OpenGL rendering, framebuffer capture and streamed music
-  main.c      Window lifecycle, keyboard input, fixed-step loop
-tests/        Portable core checks
-docs/         Original project brief and prototype notes
-```
-
-Game and core code generate a `VxVectorFrame` of 2D line segments with intensities and the platform backend consumes that frame. Another backend can reuse the flight and geometry code.
