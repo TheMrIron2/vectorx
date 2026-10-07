@@ -1,5 +1,6 @@
 #include "game/scene.h"
 #include "platform/gl_renderer.h"
+#include "platform/music.h"
 #include <SDL3/SDL_main.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +23,19 @@ static bool read_setting(const char *value, float minimum, float maximum, float 
     return true;
 }
 
+static void resize_for_view(SDL_Window *window, VxViewMode mode) {
+    if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) return;
+    const int widths[] = {600, 960, 1280}, heights[] = {800, 720, 720};
+    if (!SDL_SetWindowSize(window, widths[mode], heights[mode]))
+        fprintf(stderr, "Window resize failed: %s\n", SDL_GetError());
+}
+
 int main(int argc, char **argv) {
     int frame_limit = 0;
     bool demo = false;
+    VxViewMode view_mode = VX_VIEW_WIDE;
+    float music_volume = 0.65f;
+    float forward_speed = VX_FORWARD_SPEED;
     VxRenderSettings settings = vx_render_settings_default();
     const char *screenshot = NULL;
     for (int i = 1; i < argc; ++i) {
@@ -40,6 +51,25 @@ int main(int argc, char **argv) {
             screenshot = argv[++i];
         } else if (!strcmp(argv[i], "--demo")) demo = true;
         else if (!strcmp(argv[i], "--no-glow")) settings.glow_enabled = false;
+        else if (!strcmp(argv[i], "--music-volume") && i + 1 < argc) {
+            if (!read_setting(argv[++i], 0, 1, &music_volume)) {
+                fprintf(stderr, "--music-volume requires a value from 0 to 1\n");
+                return EXIT_FAILURE;
+            }
+        }
+        else if (!strcmp(argv[i], "--view") && i + 1 < argc) {
+            const char *value = argv[++i];
+            if (!strcmp(value, "portrait")) view_mode = VX_VIEW_PORTRAIT;
+            else if (!strcmp(value, "4:3")) view_mode = VX_VIEW_CLASSIC;
+            else if (!strcmp(value, "16:9")) view_mode = VX_VIEW_WIDE;
+            else { fprintf(stderr, "--view requires portrait, 4:3, or 16:9\n"); return EXIT_FAILURE; }
+        }
+        else if (!strcmp(argv[i], "--speed") && i + 1 < argc) {
+            if (!read_setting(argv[++i], 4, 240, &forward_speed)) {
+                fprintf(stderr, "--speed requires a value from 4 to 240\n");
+                return EXIT_FAILURE;
+            }
+        }
         else if (!strcmp(argv[i], "--glow-strength") && i + 1 < argc) {
             float scale;
             if (!read_setting(argv[++i], 0, 4, &scale)) {
@@ -60,8 +90,8 @@ int main(int argc, char **argv) {
             settings.outer_glow_radius = defaults.outer_glow_radius * scale;
         }
         else {
-            printf("Usage: vectorx [--frames N] [--demo] [--no-glow] "
-                   "[--glow-strength 0..4] [--glow-radius 0.1..8] [--screenshot file.bmp]\n");
+            printf("Usage: vectorx [--frames N] [--demo] [--view portrait|4:3|16:9] [--speed 4..240] [--no-glow] "
+                   "[--glow-strength 0..4] [--glow-radius 0.1..8] [--music-volume 0..1] [--screenshot file.bmp]\n");
             return !strcmp(argv[i], "--help") ? EXIT_SUCCESS : EXIT_FAILURE;
         }
     }
@@ -89,7 +119,8 @@ int main(int argc, char **argv) {
         SDL_Quit();
         return EXIT_FAILURE;
     }
-    SDL_SetWindowMinimumSize(window, 300, 400);
+    SDL_SetWindowMinimumSize(window, 300, 225);
+    resize_for_view(window, view_mode);
     SDL_GLContext context = SDL_GL_CreateContext(window);
     if (!context) {
         fprintf(stderr, "An OpenGL 3.3 context is required: %s\n", SDL_GetError());
@@ -105,8 +136,14 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
     const bool vsync = SDL_GL_SetSwapInterval(frame_limit ? 0 : 1);
+    VxMusic music = {0};
+    /* Deterministic capture runs stay silent and do not require an audio device. */
+    if (!frame_limit) vx_music_open(&music, "bgm/Overdriven Purpose.ogg", music_volume);
     VxFlight flight;
     vx_flight_reset(&flight);
+    flight.forward_speed = forward_speed;
+    vx_flight_set_view(&flight, view_mode);
+    VxFlight previous_flight = flight;
     VxWeapons weapons;
     vx_weapons_reset(&weapons);
     VxVectorFrame frame;
@@ -136,15 +173,27 @@ int main(int argc, char **argv) {
                     if (!SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)))
                         fprintf(stderr, "Fullscreen change failed: %s\n", SDL_GetError());
                     break;
+                case SDL_SCANCODE_V:
+                    view_mode = (VxViewMode)((view_mode + 1) % VX_VIEW_COUNT);
+                    vx_flight_set_view(&flight, view_mode);
+                    previous_flight = flight;
+                    accumulator = 0;
+                    resize_for_view(window, view_mode);
+                    break;
                 case SDL_SCANCODE_R:
                     vx_flight_reset(&flight); vx_weapons_reset(&weapons); accumulator = 0;
+                    flight.forward_speed = forward_speed;
+                    vx_flight_set_view(&flight, view_mode);
+                    previous_flight = flight;
                     break;
                 default: break;
                 }
             }
+            if (event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) resize_for_view(window, view_mode);
         }
         if (!running) break;
         const bool focused = frame_limit || (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS);
+        vx_music_set_playing(&music, !paused && focused);
         if (!paused && focused) {
             accumulator += elapsed;
             while (accumulator >= VX_FIXED_STEP) {
@@ -156,14 +205,20 @@ int main(int argc, char **argv) {
                     input = directions[phase];
                     firing = true;
                 }
+                previous_flight = flight;
                 vx_flight_update(&flight, input, (float)VX_FIXED_STEP);
                 vx_weapons_update(&weapons, &flight, firing, (float)VX_FIXED_STEP);
                 simulation_time += VX_FIXED_STEP;
                 accumulator -= VX_FIXED_STEP;
             }
-        } else accumulator = 0;
+        } else {
+            accumulator = 0;
+            previous_flight = flight;
+        }
 
-        vx_build_scene(&frame, &flight, &weapons);
+        const VxFlight render_flight = vx_flight_interpolate(&previous_flight, &flight,
+            (float)(accumulator / VX_FIXED_STEP));
+        vx_build_scene(&frame, &render_flight, &weapons);
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
         vx_gl_draw(&renderer, &frame, width, height, &settings);
@@ -190,6 +245,7 @@ int main(int argc, char **argv) {
     printf("Frames: %d | vectors: %zu/%zu | clipped: %zu | dropped: %zu | X: %.3f Y: %.3f\n",
            rendered_frames, frame.count, frame.budget, frame.stats.clipped, frame.stats.dropped,
            flight.position.x, flight.position.y);
+    vx_music_close(&music);
     vx_gl_shutdown(&renderer);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);

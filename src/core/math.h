@@ -27,4 +27,14 @@ static inline VxVec3 vx_rotate(VxVec3 v, float pitch, float yaw, float roll) {
     return (VxVec3){v.x * cr - v.y * sr, v.x * sr + v.y * cr, v.z};
 }
 
+static inline VxVec3 vx_inverse_rotate(VxVec3 v, float pitch, float yaw, float roll) {
+    /* Undo roll, yaw, then pitch: the reverse of vx_rotate's composition. */
+    const float cr = cosf(roll), sr = sinf(roll);
+    const float cy = cosf(yaw), sy = sinf(yaw);
+    const float cp = cosf(pitch), sp = sinf(pitch);
+    v = (VxVec3){v.x * cr + v.y * sr, -v.x * sr + v.y * cr, v.z};
+    v = (VxVec3){v.x * cy - v.z * sy, v.y, v.x * sy + v.z * cy};
+    return (VxVec3){v.x, v.y * cp + v.z * sp, -v.y * sp + v.z * cp};
+}
+
 #endif

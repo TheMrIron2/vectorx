@@ -35,11 +35,12 @@ static void clipping(void) {
 static void movement(void) {
     VxFlight straight, diagonal;
     vx_flight_reset(&straight); vx_flight_reset(&diagonal);
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 18; ++i) {
         vx_flight_update(&straight, (VxInput){1, 0}, (float)VX_FIXED_STEP);
         vx_flight_update(&diagonal, (VxInput){1, 1}, (float)VX_FIXED_STEP);
     }
-    CHECK(close_to(vx_v2_length(straight.velocity), vx_v2_length(diagonal.velocity)));
+    CHECK(close_to(straight.velocity.x / VX_SHIP_SPEED,
+        vx_v2_length((VxVec2){diagonal.velocity.x / VX_SHIP_SPEED, diagonal.velocity.y / VX_VERTICAL_SPEED})));
     CHECK(straight.position.x > 0 && diagonal.position.y > -2.5f);
     CHECK(straight.roll < 0);
     for (int i = 0; i < 120; ++i)
@@ -52,7 +53,7 @@ static void movement(void) {
             vx_flight_update(&straight, corners[j], (float)VX_FIXED_STEP);
         CHECK(straight.position.x >= VX_MIN_X && straight.position.x <= VX_MAX_X);
         CHECK(straight.position.y >= VX_MIN_Y && straight.position.y <= VX_MAX_Y);
-        CHECK(isfinite(straight.rail_offset) && straight.rail_offset >= 0 && straight.rail_offset < 12);
+        CHECK(isfinite(straight.rail_offset) && straight.rail_offset >= 0 && straight.rail_offset < VX_SCENERY_DEPTH);
     }
     const VxVec2 before = straight.position;
     vx_flight_update(&straight, (VxInput){NAN, 0}, (float)VX_FIXED_STEP);
@@ -104,9 +105,9 @@ static void ship_visibility(void) {
     const VxCamera camera = vx_camera_default();
     const float x_positions[] = {VX_MIN_X, VX_MAX_X};
     const float y_positions[] = {VX_MIN_Y, VX_MAX_Y};
-    const float rolls[] = {-0.48f, 0.0f, 0.48f};
-    const float pitches[] = {-0.12f, 0.12f};
-    const float yaws[] = {-0.10f, 0.10f};
+    const float rolls[] = {-VX_MAX_ROLL, 0.0f, VX_MAX_ROLL};
+    const float pitches[] = {-VX_MAX_PITCH, VX_MAX_PITCH};
+    const float yaws[] = {-VX_MAX_YAW, VX_MAX_YAW};
     for (int x = 0; x < 2; ++x) for (int y = 0; y < 2; ++y)
     for (int r = 0; r < 3; ++r) for (int p = 0; p < 2; ++p) for (int w = 0; w < 2; ++w) {
         for (size_t i = 0; i < VX_SHIP_VERTEX_COUNT; ++i) {
@@ -173,8 +174,152 @@ static void shooting(void) {
     CHECK(active_projectiles(&weapons) == 0 && close_to(weapons.cooldown, 0));
 }
 
+static void forward_motion(void) {
+    VxFlight slow, fast, coarse;
+    vx_flight_reset(&slow); vx_flight_reset(&fast); vx_flight_reset(&coarse);
+    slow.forward_speed = 16;
+    for (int i = 0; i < 60; ++i) {
+        vx_flight_update(&slow, (VxInput){0, 0}, (float)VX_FIXED_STEP);
+        vx_flight_update(&fast, (VxInput){0, 0}, (float)VX_FIXED_STEP);
+    }
+    for (int i = 0; i < 30; ++i)
+        vx_flight_update(&coarse, (VxInput){0, 0}, (float)(VX_FIXED_STEP * 2));
+    CHECK(close_to(fast.rail_offset, 4 * slow.rail_offset));
+    CHECK(close_to(fast.rail_offset, coarse.rail_offset));
+    CHECK(close_to(fast.position.x, 0) && close_to(fast.position.y, -2.5f));
+
+    VxWeapons weapons;
+    vx_weapons_reset(&weapons);
+    VxVectorFrame frame;
+    vx_frame_init(&frame, VX_MAX_LINES);
+    const float speeds[] = {4, VX_FORWARD_SPEED, 240};
+    for (int s = 0; s < 3; ++s) {
+        vx_flight_reset(&fast);
+        fast.forward_speed = speeds[s];
+        for (int i = 0; i < 3600; ++i) {
+            vx_flight_update(&fast, (VxInput){0, 0}, (float)VX_FIXED_STEP);
+            CHECK(fast.rail_offset >= 0 && fast.rail_offset < VX_SCENERY_DEPTH);
+            if (i % 12 != 0) continue;
+            vx_build_scene(&frame, &fast, &weapons);
+            CHECK(frame.stats.dropped == 0 && isfinite(frame.stats.total_length));
+        }
+    }
+    vx_flight_reset(&fast);
+    CHECK(close_to(fast.rail_offset, 0) && close_to(fast.forward_speed, VX_FORWARD_SPEED));
+}
+
+static void handling(void) {
+    VxFlight flight;
+    vx_flight_reset(&flight);
+    for (int i = 0; i < 30; ++i)
+        vx_flight_update(&flight, (VxInput){1, 0}, (float)VX_FIXED_STEP);
+    CHECK(flight.roll < -0.4f && flight.roll > -VX_MAX_ROLL);
+    CHECK(flight.camera_offset.x > 0 && flight.camera_offset.x < flight.position.x);
+    CHECK(flight.camera_yaw > 0 && flight.camera_yaw < 0.035f);
+    CHECK(fabsf(flight.camera_roll) < 0.035f);
+    const float previous_roll = flight.roll;
+    vx_flight_update(&flight, (VxInput){-1, 0}, (float)VX_FIXED_STEP);
+    CHECK(flight.roll < 0 && fabsf(flight.roll - previous_roll) < 0.03f);
+    for (int i = 0; i < 36; ++i)
+        vx_flight_update(&flight, (VxInput){-1, 0}, (float)VX_FIXED_STEP);
+    CHECK(flight.roll > 0.4f && flight.velocity.x < 0);
+    const float released_position = flight.position.x;
+    for (int i = 0; i < 120; ++i)
+        vx_flight_update(&flight, (VxInput){0, 0}, (float)VX_FIXED_STEP);
+    CHECK(fabsf(flight.position.x - released_position) < 0.65f);
+    CHECK(fabsf(flight.roll) < 0.001f && fabsf(flight.camera_yaw) < 0.001f);
+
+    const VxInput corners[] = {{1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
+    for (int step = 0; step < 2400; ++step) {
+        vx_flight_update(&flight, corners[(step / 120) % 4], (float)VX_FIXED_STEP);
+        const VxCamera camera = vx_scene_camera(&flight);
+        CHECK(fabsf(flight.roll) <= VX_MAX_ROLL && fabsf(flight.camera_roll) < 0.035f);
+        for (size_t i = 0; i < VX_SHIP_VERTEX_COUNT; ++i) {
+            const VxVec3 vertex = vx_v3_add(vx_rotate(vx_ship_vertices[i], flight.pitch, flight.yaw, flight.roll),
+                (VxVec3){flight.position.x, flight.position.y, 8});
+            VxVec2 a, b;
+            CHECK(vx_project_line(vertex, vertex, &camera, &a, &b));
+        }
+    }
+    VxFlight previous = flight, current = flight;
+    previous.rail_offset = VX_SCENERY_DEPTH - 0.2f;
+    current.rail_offset = 0.2f;
+    previous.time = 119.9f; current.time = 0.1f;
+    previous.position.x = -1; current.position.x = 1;
+    const VxFlight blended = vx_flight_interpolate(&previous, &current, 0.5f);
+    CHECK(close_to(blended.position.x, 0));
+    CHECK(blended.rail_offset < 0.001f || blended.rail_offset > VX_SCENERY_DEPTH - 0.001f);
+    CHECK(blended.time < 0.001f || blended.time > 119.999f);
+    const VxVec3 vector = {2, 3, 4};
+    const VxVec3 recovered = vx_inverse_rotate(vx_rotate(vector, 0.2f, -0.1f, 0.7f), 0.2f, -0.1f, 0.7f);
+    CHECK(close_to(vector.x, recovered.x) && close_to(vector.y, recovered.y) && close_to(vector.z, recovered.z));
+    vx_flight_reset(&flight);
+    CHECK(close_to(flight.camera_offset.x, 0) && close_to(flight.camera_yaw, 0));
+    CHECK(close_to(vx_v2_length((VxVec2){flight.angular_velocity.x, flight.angular_velocity.z}), 0));
+}
+
+static void view_modes(void) {
+    const float ratios[] = {3.0f / 4, 4.0f / 3, 16.0f / 9};
+    VxFlight flight;
+    VxWeapons weapons;
+    VxVectorFrame frame;
+    vx_weapons_reset(&weapons);
+    vx_frame_init(&frame, VX_MAX_LINES);
+    for (int mode = 0; mode < VX_VIEW_COUNT; ++mode) {
+        vx_flight_reset(&flight);
+        vx_flight_set_view(&flight, (VxViewMode)mode);
+        const VxVec2 size = vx_view_size((VxViewMode)mode);
+        CHECK(close_to(size.x / size.y, ratios[mode]));
+        const VxCamera camera = vx_scene_camera(&flight);
+        VxVec2 a, b;
+        CHECK(vx_project_line((VxVec3){0, 0, 8}, (VxVec3){1, 0, 8}, &camera, &a, &b));
+        CHECK(close_to(b.x - a.x, 55)); /* Wider FOV, unchanged geometry scale. */
+        const float horizontal_scale = size.x / VX_WIDTH;
+        const VxInput directions[] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}, {1, 1}, {-1, -1}};
+        for (int i = 0; i < 1800; ++i) {
+            vx_flight_update(&flight, directions[(i / 150) % 6], (float)VX_FIXED_STEP);
+            CHECK(flight.position.x >= VX_MIN_X * horizontal_scale && flight.position.x <= VX_MAX_X * horizontal_scale);
+            CHECK(flight.position.y >= VX_MIN_Y && flight.position.y <= VX_MAX_Y);
+            const VxCamera moving_camera = vx_scene_camera(&flight);
+            for (size_t k = 0; k < VX_SHIP_VERTEX_COUNT; ++k) {
+                const VxVec3 vertex = vx_v3_add(vx_rotate(vx_ship_vertices[k], flight.pitch, flight.yaw, flight.roll),
+                    (VxVec3){flight.position.x, flight.position.y, 8});
+                CHECK(vx_project_line(vertex, vertex, &moving_camera, &a, &b));
+            }
+            if (i % 30 != 0) continue;
+            vx_build_scene(&frame, &flight, &weapons);
+            CHECK(close_to(frame.canvas_size.x, size.x) && frame.stats.dropped == 0);
+            for (size_t k = 0; k < frame.count; ++k) {
+                CHECK(frame.lines[k].a.x >= -0.01f && frame.lines[k].a.x <= size.x + 0.01f);
+                CHECK(frame.lines[k].b.x >= -0.01f && frame.lines[k].b.x <= size.x + 0.01f);
+            }
+        }
+    }
+    vx_flight_set_view(&flight, VX_VIEW_WIDE);
+    flight.position.x = 5.8f; flight.velocity.x = 10;
+    vx_flight_set_view(&flight, VX_VIEW_PORTRAIT);
+    CHECK(close_to(flight.position.x, VX_MAX_X) && close_to(flight.velocity.x, 0));
+    VxFlight horizontal, vertical;
+    vx_flight_reset(&horizontal); vx_flight_reset(&vertical);
+    for (int i = 0; i < 18; ++i) {
+        vx_flight_update(&horizontal, (VxInput){1, 0}, (float)VX_FIXED_STEP);
+        vx_flight_update(&vertical, (VxInput){0, 1}, (float)VX_FIXED_STEP);
+    }
+    CHECK(close_to(vertical.velocity.y / horizontal.velocity.x, VX_VERTICAL_SPEED / VX_SHIP_SPEED));
+    CHECK(close_to(vertical.position.y + 2.5f, horizontal.position.x));
+    for (int mode = 0; mode < VX_VIEW_COUNT; ++mode) {
+        VxFlight reference;
+        vx_flight_reset(&reference);
+        vx_flight_set_view(&reference, (VxViewMode)mode);
+        for (int i = 0; i < 18; ++i)
+            vx_flight_update(&reference, (VxInput){1, 0}, (float)VX_FIXED_STEP);
+        CHECK(close_to(reference.velocity.x, horizontal.velocity.x));
+        CHECK(close_to(reference.position.x, horizontal.position.x));
+    }
+}
+
 int main(void) {
-    clipping(); movement(); scene_and_budget(); ship_visibility(); shooting();
+    clipping(); movement(); scene_and_budget(); ship_visibility(); shooting(); forward_motion(); handling(); view_modes();
     printf("All %d checks passed (clipping, movement, shooting, geometry and budgets).\n", checks);
     return EXIT_SUCCESS;
 }

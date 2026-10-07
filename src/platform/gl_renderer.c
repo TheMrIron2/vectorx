@@ -147,8 +147,9 @@ void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     if (pixel_width <= 0 || pixel_height <= 0) return;
-    const float scale = fminf((float)pixel_width / VX_WIDTH, (float)pixel_height / VX_HEIGHT);
-    const int width = (int)(VX_WIDTH * scale), height = (int)(VX_HEIGHT * scale);
+    const VxVec2 canvas = frame->canvas_size;
+    const float scale = fminf((float)pixel_width / canvas.x, (float)pixel_height / canvas.y);
+    const int width = (int)lroundf(canvas.x * scale), height = (int)lroundf(canvas.y * scale);
     glViewport((pixel_width - width) / 2, (pixel_height - height) / 2, width, height);
 
     const float beam_width = vx_clamp(settings->beam_width, 0.1f, 16.0f);
@@ -173,8 +174,8 @@ void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
             const float u = corners[order[k]][0], v = corners[order[k]][1];
             const VxVec2 position = vx_v2_add(line.a,
                 vx_v2_add(vx_v2_scale(axis, u), vx_v2_scale(normal, v)));
-            vertices[count++] = (VxGpuVertex){position.x * 2.0f / VX_WIDTH - 1.0f,
-                1.0f - position.y * 2.0f / VX_HEIGHT, u, v, length, line.intensity};
+            vertices[count++] = (VxGpuVertex){position.x * 2.0f / canvas.x - 1.0f,
+                1.0f - position.y * 2.0f / canvas.y, u, v, length, line.intensity};
         }
     }
     p_UseProgram(renderer->program);
