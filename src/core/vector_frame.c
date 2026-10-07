@@ -3,9 +3,17 @@
 static bool finite2(VxVec2 v) { return isfinite(v.x) && isfinite(v.y); }
 static bool finite3(VxVec3 v) { return isfinite(v.x) && isfinite(v.y) && isfinite(v.z); }
 
-VxCamera vx_camera_default(void) {
-    return (VxCamera){{300.0f, 335.0f}, 440.0f, 0.5f, 100.0f, {30, 86, 570, 700}};
+VxVec2 vx_view_size(VxViewMode mode) {
+    const float width = mode == VX_VIEW_CLASSIC ? 800.0f * 4 / 3
+        : mode == VX_VIEW_WIDE ? 800.0f * 16 / 9 : VX_WIDTH;
+    return (VxVec2){width, VX_HEIGHT};
 }
+VxCamera vx_camera_for_view(VxViewMode mode) {
+    const VxVec2 size = vx_view_size(mode);
+    return (VxCamera){.centre = {size.x * 0.5f, 335}, .focal_length = 440,
+        .near_plane = 0.5f, .far_plane = 100, .clip = {30, 86, size.x - 30, 700}};
+}
+VxCamera vx_camera_default(void) { return vx_camera_for_view(VX_VIEW_PORTRAIT); }
 
 static bool clip_depth(VxVec3 *a, VxVec3 *b, float plane, bool keep_greater) {
     const bool outside_a = keep_greater ? a->z < plane : a->z > plane;
@@ -46,6 +54,8 @@ bool vx_clip_line(VxVec2 *a, VxVec2 *b, VxRect rect) {
 bool vx_project_line(VxVec3 a, VxVec3 b, const VxCamera *camera, VxVec2 *out_a, VxVec2 *out_b) {
     if (!finite3(a) || !finite3(b) || camera->near_plane <= 0.0f ||
         camera->far_plane <= camera->near_plane) return false;
+    a = vx_inverse_rotate(vx_v3_sub(a, camera->position), camera->pitch, camera->yaw, camera->roll);
+    b = vx_inverse_rotate(vx_v3_sub(b, camera->position), camera->pitch, camera->yaw, camera->roll);
     if (!clip_depth(&a, &b, camera->near_plane, true) ||
         !clip_depth(&a, &b, camera->far_plane, false)) return false;
     *out_a = (VxVec2){camera->centre.x + a.x * camera->focal_length / a.z,
@@ -58,6 +68,7 @@ bool vx_project_line(VxVec3 a, VxVec3 b, const VxCamera *camera, VxVec2 *out_a, 
 void vx_frame_init(VxVectorFrame *frame, size_t budget) {
     *frame = (VxVectorFrame){0};
     frame->budget = budget < VX_MAX_LINES ? budget : VX_MAX_LINES;
+    frame->canvas_size = vx_view_size(VX_VIEW_PORTRAIT);
 }
 void vx_frame_clear(VxVectorFrame *frame) {
     frame->count = 0;
@@ -70,7 +81,8 @@ static void submit(VxVectorFrame *frame, VxVec2 a, VxVec2 b, float intensity) {
 }
 void vx_frame_line(VxVectorFrame *frame, VxVec2 a, VxVec2 b, float intensity) {
     ++frame->stats.requested;
-    if (!isfinite(intensity) || !vx_clip_line(&a, &b, (VxRect){0, 0, VX_WIDTH, VX_HEIGHT})) {
+    if (!isfinite(intensity) || !vx_clip_line(&a, &b,
+        (VxRect){0, 0, frame->canvas_size.x, frame->canvas_size.y})) {
         ++frame->stats.clipped;
         return;
     }

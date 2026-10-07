@@ -17,6 +17,7 @@ Run `build/debug/vectorx.exe` or `.\run.ps1` to play.
 | WASD / arrow keys | Move |
 | Space (hold) | Fire lasers |
 | F | Toggle borderless fullscreen |
+| V | Cycle portrait (3:4), 4:3 and 16:9 views |
 | R | Recenter the ship and clear projectiles |
 | P | Pause / resume |
 | G | Toggle glow |
