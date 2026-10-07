@@ -6,6 +6,12 @@ This is a final year project for my TU856 computer science degree.
 
 ## Overview
 
+
+
+https://github.com/user-attachments/assets/d23a6e4d-f8ea-4d51-975a-5c12ade64904
+
+
+
 VectorX is a new 3D rail shooter inspired by futuristic 80s aesthetics and feel. Unlike modern 3D games that rely on textured polygons and detailed environments, VectorX embraces an alternative solution, using vector visuals to evoke a sci-fi feel.
 
 The project is built using OpenGL and SDL3.
