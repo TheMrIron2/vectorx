@@ -9,12 +9,17 @@ typedef struct {
     unsigned int program, vertex_array, vertex_buffer;
     int beam_width_uniform, glow_radius_uniform, glow_strength_uniform;
     int beam_colour_uniform, glow_colour_uniform;
+    int plain_uniform;
 } VxGlRenderer;
+
+typedef struct { const char *text; float y, scale, brightness; } VxTextLine;
 
 bool vx_gl_init(VxGlRenderer *renderer);
 void vx_gl_shutdown(VxGlRenderer *renderer);
 void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
                 int pixel_width, int pixel_height, const VxRenderSettings *settings);
 bool vx_gl_save_bmp(const char *path, int width, int height);
+void vx_gl_draw_text(VxGlRenderer *renderer, VxVec2 canvas, const VxTextLine *lines,
+                     size_t count, int pixel_width, int pixel_height);
 
 #endif

@@ -8,3 +8,5 @@ Single-file C Ogg/Vorbis decoder from [nothings/stb](https://github.com/nothings
 - The upstream file retains its complete dual MIT/public-domain license. This project uses the MIT option.
 
 Built separately from the application's code. Only the float, file-based decoding path is enabled.
+
+`stb_easy_font.h` (version 1.1) is included from the same upstream revision for the plain music-selection text. SHA-256: `7b48b52a316477766c0a7a096b33a29bcbd847b6fab4fabd32bb3fdb7cea1a60`. Its complete upstream MIT/public-domain license is retained in the file; the MIT option is used.

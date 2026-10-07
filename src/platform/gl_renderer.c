@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "stb_easy_font.h"
 
 /* Resolve modern GL functions through SDL, after creating the current context. */
 #define VX_GL_FUNCTIONS(X) \
@@ -59,8 +60,10 @@ static const char *fragment_source =
     "uniform vec2 u_glow_strength;\n"
     "uniform vec3 u_beam_colour;\n"
     "uniform vec3 u_glow_colour;\n"
+    "uniform float u_plain;\n"
     "out vec4 colour;\n"
     "void main() {\n"
+    "    if (u_plain > 0.5) { colour = vec4(vec3(v_properties.y), 1.0); return; }\n"
     "    float end_distance = max(max(-v_local.x, v_local.x-v_properties.x), 0.0);\n"
     "    float d2 = dot(vec2(end_distance, v_local.y), vec2(end_distance, v_local.y));\n"
     "    float beam = exp(-d2 / u_beam_width_squared);\n"
@@ -116,6 +119,8 @@ bool vx_gl_init(VxGlRenderer *renderer) {
     renderer->glow_strength_uniform = p_GetUniformLocation(renderer->program, "u_glow_strength");
     renderer->beam_colour_uniform = p_GetUniformLocation(renderer->program, "u_beam_colour");
     renderer->glow_colour_uniform = p_GetUniformLocation(renderer->program, "u_glow_colour");
+    renderer->plain_uniform = p_GetUniformLocation(renderer->program, "u_plain");
+    stb_easy_font_spacing(0);
     p_GenVertexArrays(1, &renderer->vertex_array);
     p_GenBuffers(1, &renderer->vertex_buffer);
     p_BindVertexArray(renderer->vertex_array);
@@ -141,16 +146,21 @@ void vx_gl_shutdown(VxGlRenderer *renderer) {
 
 typedef struct { float x, y, local_x, local_y, length, intensity; } VxGpuVertex;
 
-void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
-                int pixel_width, int pixel_height, const VxRenderSettings *settings) {
+static bool begin_frame(VxVec2 canvas, int pixel_width, int pixel_height) {
     glViewport(0, 0, pixel_width, pixel_height);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    if (pixel_width <= 0 || pixel_height <= 0) return;
-    const VxVec2 canvas = frame->canvas_size;
+    if (pixel_width <= 0 || pixel_height <= 0) return false;
     const float scale = fminf((float)pixel_width / canvas.x, (float)pixel_height / canvas.y);
     const int width = (int)lroundf(canvas.x * scale), height = (int)lroundf(canvas.y * scale);
     glViewport((pixel_width - width) / 2, (pixel_height - height) / 2, width, height);
+    return true;
+}
+
+void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
+                int pixel_width, int pixel_height, const VxRenderSettings *settings) {
+    const VxVec2 canvas = frame->canvas_size;
+    if (!begin_frame(canvas, pixel_width, pixel_height)) return;
 
     const float beam_width = vx_clamp(settings->beam_width, 0.1f, 16.0f);
     const float inner_radius = vx_clamp(settings->inner_glow_radius, 0.1f, 64.0f);
@@ -179,6 +189,7 @@ void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
         }
     }
     p_UseProgram(renderer->program);
+    p_Uniform1f(renderer->plain_uniform, 0);
     p_Uniform1f(renderer->beam_width_uniform, beam_width * beam_width);
     p_Uniform2f(renderer->glow_radius_uniform, inner_radius * inner_radius, outer_radius * outer_radius);
     p_Uniform2f(renderer->glow_strength_uniform,
@@ -192,6 +203,41 @@ void vx_gl_draw(VxGlRenderer *renderer, const VxVectorFrame *frame,
     p_BindBuffer(GL_ARRAY_BUFFER, renderer->vertex_buffer);
     p_BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(count * sizeof(VxGpuVertex)), vertices, GL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, (GLsizei)count);
+}
+
+void vx_gl_draw_text(VxGlRenderer *renderer, VxVec2 canvas, const VxTextLine *lines,
+                     size_t line_count, int pixel_width, int pixel_height) {
+    if (!begin_frame(canvas, pixel_width, pixel_height)) return;
+    p_UseProgram(renderer->program);
+    p_Uniform1f(renderer->plain_uniform, 1);
+    p_BindVertexArray(renderer->vertex_array);
+    p_BindBuffer(GL_ARRAY_BUFFER, renderer->vertex_buffer);
+    typedef struct { float x, y, z; unsigned char colour[4]; } FontVertex;
+    FontVertex glyphs[4096];
+    VxGpuVertex vertices[1024 * 6];
+    for (size_t line = 0; line < line_count; ++line) {
+        char printable[256];
+        size_t length = 0;
+        for (; lines[line].text[length] && length < sizeof(printable) - 1; ++length) {
+            const unsigned char c = (unsigned char)lines[line].text[length];
+            printable[length] = c >= 32 && c <= 126 ? (char)c : '?';
+        }
+        printable[length] = 0;
+        const int text_width = stb_easy_font_width(printable);
+        const float scale = fminf(lines[line].scale, (canvas.x - 60) / fmaxf(1, (float)text_width));
+        const float x = (canvas.x - (float)text_width * scale) * 0.5f;
+        const float y = lines[line].y - (float)stb_easy_font_height(printable) * scale * 0.5f;
+        const int quads = stb_easy_font_print(0, 0, printable, NULL, glyphs, sizeof(glyphs));
+        const int order[] = {0, 1, 2, 0, 2, 3};
+        size_t count = 0;
+        for (int q = 0; q < quads; ++q) for (int k = 0; k < 6; ++k) {
+            const FontVertex point = glyphs[q * 4 + order[k]];
+            vertices[count++] = (VxGpuVertex){(x + point.x * scale) * 2 / canvas.x - 1,
+                1 - (y + point.y * scale) * 2 / canvas.y, 0, 0, 0, lines[line].brightness};
+        }
+        p_BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(count * sizeof(VxGpuVertex)), vertices, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)count);
+    }
 }
 
 bool vx_gl_save_bmp(const char *path, int width, int height) {

@@ -1,6 +1,7 @@
 #include "game/scene.h"
 #include "platform/gl_renderer.h"
 #include "platform/music.h"
+#include "platform/track_menu.h"
 #include <SDL3/SDL_main.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +34,7 @@ static void resize_for_view(SDL_Window *window, VxViewMode mode) {
 int main(int argc, char **argv) {
     int frame_limit = 0;
     bool demo = false;
+    bool menu_preview = false;
     VxViewMode view_mode = VX_VIEW_WIDE;
     float music_volume = 0.65f;
     float forward_speed = VX_FORWARD_SPEED;
@@ -50,6 +52,7 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
             screenshot = argv[++i];
         } else if (!strcmp(argv[i], "--demo")) demo = true;
+        else if (!strcmp(argv[i], "--menu")) menu_preview = true;
         else if (!strcmp(argv[i], "--no-glow")) settings.glow_enabled = false;
         else if (!strcmp(argv[i], "--music-volume") && i + 1 < argc) {
             if (!read_setting(argv[++i], 0, 1, &music_volume)) {
@@ -90,7 +93,7 @@ int main(int argc, char **argv) {
             settings.outer_glow_radius = defaults.outer_glow_radius * scale;
         }
         else {
-            printf("Usage: vectorx [--frames N] [--demo] [--view portrait|4:3|16:9] [--speed 4..240] [--no-glow] "
+            printf("Usage: vectorx [--frames N] [--demo] [--menu] [--view portrait|4:3|16:9] [--speed 4..240] [--no-glow] "
                    "[--glow-strength 0..4] [--glow-radius 0.1..8] [--music-volume 0..1] [--screenshot file.bmp]\n");
             return !strcmp(argv[i], "--help") ? EXIT_SUCCESS : EXIT_FAILURE;
         }
@@ -137,8 +140,9 @@ int main(int argc, char **argv) {
     }
     const bool vsync = SDL_GL_SetSwapInterval(frame_limit ? 0 : 1);
     VxMusic music = {0};
-    /* Deterministic capture runs stay silent and do not require an audio device. */
-    if (!frame_limit) vx_music_open(&music, "bgm/Overdriven Purpose.ogg", music_volume);
+    VxTrackMenu track_menu;
+    const bool tracks_available = vx_track_menu_open(&track_menu);
+    bool selecting_track = tracks_available && (!frame_limit || menu_preview);
     VxFlight flight;
     vx_flight_reset(&flight);
     flight.forward_speed = forward_speed;
@@ -164,11 +168,20 @@ int main(int argc, char **argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) running = false;
+            if (running && selecting_track && vx_track_menu_event(&track_menu, &event, window, vx_view_size(view_mode))) {
+                char *track_path = vx_track_menu_path(&track_menu);
+                if (!frame_limit && track_path) vx_music_open(&music, track_path, music_volume);
+                SDL_free(track_path);
+                selecting_track = false;
+                accumulator = 0;
+                elapsed = 0;
+                last = SDL_GetPerformanceCounter();
+            }
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 switch (event.key.scancode) {
                 case SDL_SCANCODE_ESCAPE: running = false; break;
-                case SDL_SCANCODE_P: paused = !paused; accumulator = 0; break;
-                case SDL_SCANCODE_G: settings.glow_enabled = !settings.glow_enabled; break;
+                case SDL_SCANCODE_P: if (!selecting_track) { paused = !paused; accumulator = 0; } break;
+                case SDL_SCANCODE_G: if (!selecting_track) settings.glow_enabled = !settings.glow_enabled; break;
                 case SDL_SCANCODE_F:
                     if (!SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)))
                         fprintf(stderr, "Fullscreen change failed: %s\n", SDL_GetError());
@@ -181,6 +194,7 @@ int main(int argc, char **argv) {
                     resize_for_view(window, view_mode);
                     break;
                 case SDL_SCANCODE_R:
+                    if (selecting_track) break;
                     vx_flight_reset(&flight); vx_weapons_reset(&weapons); accumulator = 0;
                     flight.forward_speed = forward_speed;
                     vx_flight_set_view(&flight, view_mode);
@@ -193,8 +207,8 @@ int main(int argc, char **argv) {
         }
         if (!running) break;
         const bool focused = frame_limit || (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS);
-        vx_music_set_playing(&music, !paused && focused);
-        if (!paused && focused) {
+        vx_music_set_playing(&music, !selecting_track && !paused && focused);
+        if (!selecting_track && !paused && focused) {
             accumulator += elapsed;
             while (accumulator >= VX_FIXED_STEP) {
                 VxInput input = keyboard_input();
@@ -218,10 +232,16 @@ int main(int argc, char **argv) {
 
         const VxFlight render_flight = vx_flight_interpolate(&previous_flight, &flight,
             (float)(accumulator / VX_FIXED_STEP));
-        vx_build_scene(&frame, &render_flight, &weapons);
         int width = 0, height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
-        vx_gl_draw(&renderer, &frame, width, height, &settings);
+        if (selecting_track) {
+            const VxVec2 canvas = vx_view_size(view_mode);
+            const size_t count = vx_track_menu_lines(&track_menu, canvas);
+            vx_gl_draw_text(&renderer, canvas, track_menu.lines, count, width, height);
+        } else {
+            vx_build_scene(&frame, &render_flight, &weapons);
+            vx_gl_draw(&renderer, &frame, width, height, &settings);
+        }
         ++rendered_frames;
         if (frame_limit && rendered_frames >= frame_limit) {
             if (screenshot && !vx_gl_save_bmp(screenshot, width, height)) {
@@ -246,6 +266,7 @@ int main(int argc, char **argv) {
            rendered_frames, frame.count, frame.budget, frame.stats.clipped, frame.stats.dropped,
            flight.position.x, flight.position.y);
     vx_music_close(&music);
+    vx_track_menu_close(&track_menu);
     vx_gl_shutdown(&renderer);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);
