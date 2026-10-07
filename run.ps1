@@ -8,6 +8,33 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $previousPath = $env:PATH
 
+function Move-LockedExecutable([string]$ExecutablePath) {
+    if (-not (Test-Path -LiteralPath $ExecutablePath)) { return }
+    $fileHandle = $null
+    try {
+        $fileHandle = [System.IO.File]::Open($ExecutablePath,
+            [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    }
+    catch {
+        $cause = $_.Exception.GetBaseException()
+        $nativeError = $cause.HResult -band 0xFFFF
+        # Only sharing/lock violations indicate an in-use executable. Preserve
+        # other errors (permissions, missing files, etc.) instead of hiding them.
+        if ($cause -isnot [System.IO.IOException] -or $nativeError -notin @(32, 33)) { throw }
+        $directory = Split-Path -Parent $ExecutablePath
+        $backupName = 'vectorx-running-' + [guid]::NewGuid().ToString('N') + '.exe'
+        $backupPath = Join-Path $directory $backupName
+        # Windows permits renaming a running executable, but not overwriting it.
+        # Both paths remain inside the selected build directory; keep the old
+        # image available to its running process while the linker writes anew.
+        Move-Item -LiteralPath $ExecutablePath -Destination $backupPath -ErrorAction Stop
+        Write-Host "Executable is in use; preserved it as $backupName before rebuilding."
+    }
+    finally {
+        if ($fileHandle) { $fileHandle.Dispose() }
+    }
+}
+
 try {
     # Prefer the portable tools used to verify this checkout, if they are present.
     $portableCmake = Join-Path $PSScriptRoot 'build/tools/cmake-3.31.8-windows-x86_64/bin/cmake.exe'
@@ -47,12 +74,18 @@ try {
     }
     & $cmakePath @configure
     if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+    $executable = Join-Path $buildDirectory 'vectorx.exe'
+    $configurationExecutable = Join-Path $buildDirectory "$BuildType/vectorx.exe"
+    if (-not (Test-Path -LiteralPath $executable) -and (Test-Path -LiteralPath $configurationExecutable)) {
+        $executable = $configurationExecutable
+    }
+    Move-LockedExecutable $executable
     & $cmakePath --build $buildDirectory --config $BuildType --parallel 4
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
     if ($Test) {
         $ctestPath = Join-Path (Split-Path -Parent $cmakePath) 'ctest.exe'
         & $ctestPath --test-dir $buildDirectory -C $BuildType --output-on-failure
-        if ($LASTEXITCODE -ne 0) { throw 'Core checks failed.' }
+        if ($LASTEXITCODE -ne 0) { throw 'Checks failed.' }
     }
     if (-not $BuildOnly) {
         $executable = Join-Path $buildDirectory 'vectorx.exe'
