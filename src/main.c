@@ -168,6 +168,8 @@ int main(int argc, char **argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) running = false;
+            if (paused && event.type == SDL_EVENT_KEY_UP && event.key.scancode == SDL_SCANCODE_SPACE)
+                vx_weapons_cancel_trigger(&weapons);
             if (running && selecting_track && vx_track_menu_event(&track_menu, &event, window, vx_view_size(view_mode))) {
                 char *track_path = vx_track_menu_path(&track_menu);
                 if (!frame_limit && track_path) vx_music_open(&music, track_path, music_volume);
@@ -207,6 +209,7 @@ int main(int argc, char **argv) {
         }
         if (!running) break;
         const bool focused = frame_limit || (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS);
+        if (!focused) vx_weapons_cancel_trigger(&weapons);
         vx_music_set_playing(&music, !selecting_track && !paused && focused);
         if (!selecting_track && !paused && focused) {
             accumulator += elapsed;
@@ -217,7 +220,7 @@ int main(int argc, char **argv) {
                     const int phase = (int)(simulation_time / 0.75) % 4;
                     const VxInput directions[] = {{1, 1}, {-1, 0}, {0, -1}, {0, 0}};
                     input = directions[phase];
-                    firing = true;
+                    firing = fmod(simulation_time, 1.6) < 1.15;
                 }
                 previous_flight = flight;
                 vx_flight_update(&flight, input, (float)VX_FIXED_STEP);

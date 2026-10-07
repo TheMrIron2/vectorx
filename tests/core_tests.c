@@ -167,7 +167,7 @@ static void shooting(void) {
     }
     vx_weapons_reset(&weapons);
     for (int i = 0; i < VX_MAX_PROJECTILES - 1; ++i)
-        weapons.projectiles[i] = (VxProjectile){{0, 0, 8}, true};
+        weapons.projectiles[i] = (VxProjectile){{0, 0, 8}, true, VX_PROJECTILE_LASER};
     vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
     CHECK(active_projectiles(&weapons) == VX_MAX_PROJECTILES - 1); /* No partial pair. */
     vx_weapons_reset(&weapons);
@@ -206,6 +206,91 @@ static void forward_motion(void) {
     }
     vx_flight_reset(&fast);
     CHECK(close_to(fast.rail_offset, 0) && close_to(fast.forward_speed, VX_FORWARD_SPEED));
+}
+
+static int projectiles_of_kind(const VxWeapons *weapons, VxProjectileKind kind) {
+    int count = 0;
+    for (int i = 0; i < VX_MAX_PROJECTILES; ++i)
+        if (weapons->projectiles[i].active && weapons->projectiles[i].kind == kind) ++count;
+    return count;
+}
+
+static void burst_and_charge(void) {
+    VxFlight flight;
+    VxWeapons weapons;
+    vx_flight_reset(&flight); vx_weapons_reset(&weapons);
+    for (int i = 0; i < 30; ++i)
+        vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
+    CHECK(weapons.burst_shots == VX_BURST_SHOTS);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_LASER) == 6);
+    CHECK(weapons.state == VX_WEAPON_CHARGING);
+    CHECK(vx_weapons_charge_fraction(&weapons) > 0 && vx_weapons_charge_fraction(&weapons) < 1);
+    vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    CHECK(weapons.state == VX_WEAPON_IDLE && projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 0);
+
+    vx_weapons_reset(&weapons);
+    for (int i = 0; i < 79; ++i)
+        vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
+    CHECK(weapons.state == VX_WEAPON_CHARGING && vx_weapons_charge_fraction(&weapons) < 1);
+    vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
+    CHECK(weapons.state == VX_WEAPON_READY && close_to(vx_weapons_charge_fraction(&weapons), 1));
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_LASER) == 6);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 0);
+    vx_weapons_update(&weapons, &flight, false, NAN);
+    CHECK(weapons.state == VX_WEAPON_READY && projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 0);
+    for (int i = 0; i < 600; ++i)
+        vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
+    CHECK(active_projectiles(&weapons) == 0 && weapons.state == VX_WEAPON_READY);
+    CHECK(weapons.burst_shots == 3 && close_to(weapons.charge_time, VX_CHARGE_TIME));
+    flight.position.x = 1; flight.pitch = -0.1f; flight.yaw = 0.15f; flight.roll = -0.6f;
+    const VxVec3 origin = vx_weapons_charge_origin(&flight);
+    vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 1);
+    CHECK(weapons.state == VX_WEAPON_IDLE && !weapons.was_firing);
+    CHECK(close_to(weapons.projectiles[0].position.x, origin.x));
+    CHECK(close_to(weapons.projectiles[0].position.y, origin.y));
+    CHECK(close_to(weapons.projectiles[0].position.z, origin.z));
+    flight.position.x = -1;
+    vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 1);
+    CHECK(close_to(weapons.projectiles[0].position.x, origin.x));
+    CHECK(close_to(weapons.projectiles[0].position.z, origin.z + VX_CHARGED_PROJECTILE_SPEED * (float)VX_FIXED_STEP));
+    vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_LASER) == 2 && weapons.burst_shots == 1);
+    const int before_cancel = active_projectiles(&weapons);
+    vx_weapons_cancel_trigger(&weapons);
+    CHECK(weapons.state == VX_WEAPON_IDLE && !weapons.was_firing && close_to(weapons.charge_time, 0));
+    CHECK(active_projectiles(&weapons) == before_cancel);
+    vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 1);
+
+    vx_weapons_reset(&weapons);
+    for (int i = 0; i < 5; ++i) {
+        vx_weapons_update(&weapons, &flight, true, (float)VX_FIXED_STEP);
+        vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    }
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_LASER) == 10);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 0);
+    vx_weapons_reset(&weapons);
+    for (int i = 0; i < VX_MAX_PROJECTILES; ++i)
+        weapons.projectiles[i] = (VxProjectile){{0, 0, 8}, true, VX_PROJECTILE_LASER};
+    weapons.state = VX_WEAPON_READY; weapons.was_firing = true;
+    vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    CHECK(active_projectiles(&weapons) == VX_MAX_PROJECTILES && weapons.state == VX_WEAPON_IDLE);
+    weapons.projectiles[0].active = false;
+    vx_weapons_update(&weapons, &flight, false, (float)VX_FIXED_STEP);
+    CHECK(projectiles_of_kind(&weapons, VX_PROJECTILE_CHARGED) == 0);
+    vx_weapons_reset(&weapons);
+    CHECK(weapons.state == VX_WEAPON_IDLE && active_projectiles(&weapons) == 0);
+    VxVectorFrame frame;
+    vx_frame_init(&frame, VX_MAX_LINES);
+    for (int i = 0; i < 2400; ++i) {
+        vx_weapons_update(&weapons, &flight, (i % 120) < 90, (float)VX_FIXED_STEP);
+        if (i % 12 != 0) continue;
+        vx_build_scene(&frame, &flight, &weapons);
+        CHECK(frame.stats.dropped == 0 && isfinite(frame.stats.total_length));
+        CHECK(active_projectiles(&weapons) <= VX_MAX_PROJECTILES);
+    }
 }
 
 static void handling(void) {
@@ -320,6 +405,7 @@ static void view_modes(void) {
 
 int main(void) {
     clipping(); movement(); scene_and_budget(); ship_visibility(); shooting(); forward_motion(); handling(); view_modes();
+    burst_and_charge();
     printf("All %d checks passed (clipping, movement, shooting, geometry and budgets).\n", checks);
     return EXIT_SUCCESS;
 }

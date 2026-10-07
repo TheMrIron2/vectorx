@@ -52,6 +52,21 @@ static void corridor(VxVectorFrame *frame, const VxFlight *flight, const VxCamer
     }
 }
 
+static void charge_orb(VxVectorFrame *frame, VxVec3 centre, float radius,
+                        float intensity, const VxCamera *camera) {
+    /* Three sparse great circles keep the shot distinct from the thin lasers. */
+    for (int plane = 0; plane < 3; ++plane) for (int i = 0; i < 8; ++i) {
+        const float a = (float)i * 0.785398163f, b = (float)(i + 1) * 0.785398163f;
+        const float ax = cosf(a) * radius, ay = sinf(a) * radius;
+        const float bx = cosf(b) * radius, by = sinf(b) * radius;
+        const VxVec3 from = plane == 0 ? (VxVec3){ax, ay, 0}
+            : plane == 1 ? (VxVec3){ax, 0, ay} : (VxVec3){0, ax, ay};
+        const VxVec3 to = plane == 0 ? (VxVec3){bx, by, 0}
+            : plane == 1 ? (VxVec3){bx, 0, by} : (VxVec3){0, bx, by};
+        vx_frame_world_line(frame, vx_v3_add(centre, from), vx_v3_add(centre, to), camera, intensity);
+    }
+}
+
 VxCamera vx_scene_camera(const VxFlight *flight) {
     VxCamera camera = vx_camera_for_view(flight->view_mode);
     camera.position = (VxVec3){flight->camera_offset.x, flight->camera_offset.y, 0};
@@ -66,11 +81,20 @@ void vx_build_scene(VxVectorFrame *frame, const VxFlight *flight, const VxWeapon
     frame->canvas_size = vx_view_size(flight->view_mode);
     const VxCamera camera = vx_scene_camera(flight);
     ship(frame, flight, &camera); /* Player gets first use of the segment budget. */
+    if (weapons->state == VX_WEAPON_CHARGING || weapons->state == VX_WEAPON_READY) {
+        const float charge = vx_weapons_charge_fraction(weapons);
+        const float pulse = weapons->state == VX_WEAPON_READY ? 1 + 0.035f * sinf(flight->time * 18) : 1;
+        charge_orb(frame, vx_weapons_charge_origin(flight), (0.08f + charge * 0.30f) * pulse,
+            0.45f + charge * 0.55f, &camera);
+    }
     for (int i = 0; i < VX_MAX_PROJECTILES; ++i) {
         const VxProjectile projectile = weapons->projectiles[i];
         if (!projectile.active) continue;
-        vx_frame_world_line(frame, projectile.position,
-            vx_v3_add(projectile.position, (VxVec3){0, 0, 1.8f}), &camera, 0.9f);
+        if (projectile.kind == VX_PROJECTILE_CHARGED)
+            charge_orb(frame, projectile.position, 0.42f, 1, &camera);
+        else
+            vx_frame_world_line(frame, projectile.position,
+                vx_v3_add(projectile.position, (VxVec3){0, 0, 1.8f}), &camera, 0.9f);
     }
     corridor(frame, flight, &camera);
 }
